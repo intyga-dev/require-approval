@@ -1,0 +1,134 @@
+name: "Intyga — Require Human Approval"
+description: "Gate a workflow on a cryptographically-signed human approval, verified offline. No app code changes."
+branding:
+  icon: "lock"
+  color: "purple"
+
+inputs:
+  gateway-url:
+    description: "Intyga gateway base URL."
+    required: true
+  client-id:
+    description: "SERVICE-identity API key client id (so the pipeline REQUESTS and a human APPROVES → separation of duties)."
+    required: true
+  client-secret:
+    description: "SERVICE-identity API key secret."
+    required: true
+  action-description:
+    description: "Human-readable description shown to the approver (WYSIWYS)."
+    required: true
+  target:
+    description: "The execution target — the environment/RP this approval is for, e.g. prod-cluster-01. Bound into the signed payload (DIV Target Isolation) so an approval cannot be replayed against a different target."
+    required: true
+  action-type:
+    description: "Stable action identifier bound into the signed payload, e.g. deploy_production."
+    required: true
+  approver-keys:
+    description: "Comma-separated base64 approver public keys THIS pipeline trusts, resolved from your own key management. Required to verify the receipt — a receipt cannot vouch for its own signer."
+    required: true
+  params:
+    description: "JSON object of the exact parameters that will execute (bound into the signature)."
+    required: false
+    default: "{}"
+  web-url:
+    description: "Base URL of the Intyga console that hosts the /approve page (where the human signs)."
+    required: true
+  timeout:
+    description: "Seconds to wait for the human to approve before failing the job."
+    required: false
+    default: "600"
+  consume:
+    description: "Single-use: mark the approval consumed once verified (recommended)."
+    required: false
+    default: "true"
+  slack-webhook:
+    description: "Optional Slack Incoming Webhook URL. If set, posts an interactive 'Approve' message."
+    required: false
+    default: ""
+  teams-webhook:
+    description: "Optional Microsoft Teams Incoming Webhook URL. If set, posts an 'Approve' card."
+    required: false
+    default: ""
+  sdk-version:
+    description: >-
+      Version of @intyga/sdk this Action runs via npx. Defaults to the version this Action release
+      was built and tested against. Override only to pin backwards; prefer bumping the Action.
+    required: false
+    # Pinned, not "latest". A gate that resolves `@intyga/sdk@latest` at run time executes whatever
+    # was published most recently — so a bad or compromised publish changes what runs inside every
+    # customer's approval step with no action on their part. That is the unattended-propagation
+    # shape this product exists to argue against, and it would be running in the gate itself.
+    #
+    # scripts/build-public-tree.sh rewrites this from the real SDK manifest when building the public
+    # Action repo, so it cannot drift the way a hand-typed literal would.
+    default: "1.0.0"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    # 1) Create the challenge and get the deep-link immediately (does NOT block).
+    - name: Request Intyga approval
+      id: request
+      shell: bash
+      # Inputs reach the shell only via env vars — interpolating ${{ inputs.* }} into `run:` text
+      # lets a crafted input inject commands into the caller's runner (template injection).
+      env:
+        INTYGA_CLIENT_ID: ${{ inputs.client-id }}
+        INTYGA_CLIENT_SECRET: ${{ inputs.client-secret }}
+        SDK_VERSION: ${{ inputs.sdk-version }}
+        ACTION_DESCRIPTION: ${{ inputs.action-description }}
+        GATEWAY_URL: ${{ inputs.gateway-url }}
+        WEB_URL: ${{ inputs.web-url }}
+        ACTION_TYPE: ${{ inputs.action-type }}
+        TARGET: ${{ inputs.target }}
+        PARAMS: ${{ inputs.params }}
+      run: |
+        npx --yes "@intyga/sdk@${SDK_VERSION}" intyga authorize "$ACTION_DESCRIPTION" \
+          --gateway "$GATEWAY_URL" --web "$WEB_URL" --target "$TARGET" \
+          --type "$ACTION_TYPE" --params "$PARAMS" --no-wait
+        # exposes steps.request.outputs.nonce and .approval_url
+
+    # 2) Notify the approver in Slack/Teams with context + an Approve button (their webhook, their data).
+    - name: Notify approver
+      if: ${{ inputs.slack-webhook != '' || inputs.teams-webhook != '' }}
+      shell: bash
+      env:
+        INTYGA_SLACK_WEBHOOK: ${{ inputs.slack-webhook }}
+        INTYGA_TEAMS_WEBHOOK: ${{ inputs.teams-webhook }}
+        SDK_VERSION: ${{ inputs.sdk-version }}
+        ACTION_DESCRIPTION: ${{ inputs.action-description }}
+        APPROVAL_URL: ${{ steps.request.outputs.approval_url }}
+      run: |
+        {
+          echo "### 🔒 Intyga approval required"
+          echo "[Approve: ${ACTION_DESCRIPTION}](${APPROVAL_URL})"
+        } >> "$GITHUB_STEP_SUMMARY"
+        npx --yes "@intyga/sdk@${SDK_VERSION}" intyga notify \
+          --url "$APPROVAL_URL" \
+          --context "$ACTION_DESCRIPTION"
+
+    # 3) Block until a human approves; verify the receipt offline; consume. Non-zero fails the job.
+    - name: Await approval
+      shell: bash
+      env:
+        SDK_VERSION: ${{ inputs.sdk-version }}
+        NONCE: ${{ steps.request.outputs.nonce }}
+        GATEWAY_URL: ${{ inputs.gateway-url }}
+        ACTION_TYPE: ${{ inputs.action-type }}
+        TARGET: ${{ inputs.target }}
+        PARAMS: ${{ inputs.params }}
+        TIMEOUT: ${{ inputs.timeout }}
+        CONSUME: ${{ inputs.consume }}
+        INTYGA_APPROVER_KEYS: ${{ inputs.approver-keys }}
+      run: |
+        EXTRA=()
+        if [ "$CONSUME" = "true" ]; then EXTRA+=(--consume); fi
+        npx --yes "@intyga/sdk@${SDK_VERSION}" intyga await "$NONCE" \
+          --gateway "$GATEWAY_URL" --target "$TARGET" \
+          --type "$ACTION_TYPE" --params "$PARAMS" \
+          --timeout "$TIMEOUT" \
+          "${EXTRA[@]}"
