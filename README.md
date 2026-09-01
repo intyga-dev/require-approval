@@ -22,6 +22,8 @@ jobs:
           action-description: "Deploy ${{ github.repository }}@${{ github.sha }} to production"
           params: '{"repo":"${{ github.repository }}","sha":"${{ github.sha }}"}'
           approver-keys: ${{ secrets.INTYGA_APPROVER_KEYS }}
+          webauthn-origin: ${{ vars.INTYGA_WEBAUTHN_ORIGIN }} # approval console origin — REQUIRED for passkey receipts
+          webauthn-rp-id: ${{ vars.INTYGA_WEBAUTHN_RP_ID }}   # its RP ID; the verifier fails closed without these
           timeout: "600"
   deploy:
     needs: approve          # cannot start unless approval succeeded
@@ -62,7 +64,7 @@ pipeline continues — they never open GitHub. A convenience gate, not a blockin
 | `consume` | | `true` | Single-use: mark the approval consumed once verified |
 | `slack-webhook` | | — | Slack Incoming Webhook — posts an interactive Approve message |
 | `teams-webhook` | | — | Teams Incoming Webhook — posts an Approve card |
-| `sdk-version` | | `latest` | `@intyga/sdk` version run via `npx` |
+| `sdk-version` | | pinned | `@intyga/sdk` version run via `npx` — defaults to the version this Action release was built against, never `latest`: a gate that resolves `latest` at run time executes whatever was published most recently. Override only to pin backwards |
 
 ## Security notes
 - Credentials are passed to the CLI **via the environment**, never as command-line arguments (which are

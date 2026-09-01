@@ -26,6 +26,14 @@ inputs:
   approver-keys:
     description: "Comma-separated base64 approver public keys THIS pipeline trusts, resolved from your own key management. Required to verify the receipt — a receipt cannot vouch for its own signer."
     required: true
+  webauthn-origin:
+    description: "Origin of the approval console the human signs in (e.g. https://console.example.com). REQUIRED for passkey receipts — the verifier fails closed without it."
+    required: false
+    default: ""
+  webauthn-rp-id:
+    description: "Relying-party ID of the approval console (e.g. console.example.com). REQUIRED for passkey receipts, together with webauthn-origin."
+    required: false
+    default: ""
   params:
     description: "JSON object of the exact parameters that will execute (bound into the signature)."
     required: false
@@ -124,6 +132,8 @@ runs:
         TIMEOUT: ${{ inputs.timeout }}
         CONSUME: ${{ inputs.consume }}
         INTYGA_APPROVER_KEYS: ${{ inputs.approver-keys }}
+        INTYGA_WEBAUTHN_ORIGIN: ${{ inputs.webauthn-origin }}
+        INTYGA_WEBAUTHN_RP_ID: ${{ inputs.webauthn-rp-id }}
       run: |
         EXTRA=()
         if [ "$CONSUME" = "true" ]; then EXTRA+=(--consume); fi

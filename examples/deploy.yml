@@ -22,6 +22,10 @@ jobs:
           action-description: "Deploy ${{ github.repository }}@${{ github.sha }} to production"
           params: '{"repo":"${{ github.repository }}","sha":"${{ github.sha }}"}'
           approver-keys: ${{ secrets.INTYGA_APPROVER_KEYS }} # keys YOU trust, not the receipt's
+          # REQUIRED for passkey receipts: the approval console's origin and RP ID. Without them
+          # the offline verifier refuses the receipt rather than trust an assertion from any site.
+          webauthn-origin: ${{ vars.INTYGA_WEBAUTHN_ORIGIN }}
+          webauthn-rp-id: ${{ vars.INTYGA_WEBAUTHN_RP_ID }}
           timeout: "600"
           # Optional: DM the approver an interactive "Approve" button so they never hunt through CI logs.
           slack-webhook: ${{ secrets.INTYGA_SLACK_WEBHOOK }}
