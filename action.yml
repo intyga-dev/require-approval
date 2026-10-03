@@ -25,7 +25,36 @@ inputs:
     required: true
   approver-keys:
     description: "Comma-separated base64 approver public keys THIS pipeline trusts, resolved from your own key management. Required to verify the receipt — a receipt cannot vouch for its own signer."
-    required: true
+    required: false
+    default: ""
+  approvers-json:
+    description: >-
+      The trusted approvers as an `intyga-trust-anchor` JSON document (exported from your INTYGA
+      console under Approvals), as an alternative to approver-keys. It names PEOPLE with their keys, so a
+      quorum counts people rather than keys, and it carries the console origin and RP ID. Store it as a
+      repository variable you review, never something the pipeline fetches from the gateway. Give either
+      this or approver-keys, not both.
+    required: false
+    default: ""
+  required-approvals:
+    description: >-
+      The minimum number of independent human approvals YOUR policy demands. A receipt whose own signed
+      requirement is weaker is refused, so the requirement cannot be lowered by whoever composes the
+      signed bytes (DIV section 5 step 3d). Strongly recommended.
+    required: false
+    default: ""
+  request-id:
+    description: >-
+      Set to "true" to add a fresh random approvalRequestId to the signed params, so this run's approval
+      cannot be reused for another run. The Action passes the same params to the await step itself.
+    required: false
+    default: "false"
+  evidence-file:
+    description: >-
+      Path to write a JSON evidence file (the receipt, what was expected, the trust anchor, the
+      verification result and whether it was consumed). Written with mode 0600.
+    required: false
+    default: ""
   webauthn-origin:
     description: "Origin of the approval console the human signs in (e.g. https://console.example.com). REQUIRED for passkey receipts — the verifier fails closed without it."
     required: false
@@ -69,14 +98,26 @@ inputs:
     #
     # scripts/build-public-tree.sh rewrites this from the real SDK manifest when building the public
     # Action repo, so it cannot drift the way a hand-typed literal would.
-    default: "1.0.0"
+    default: "1.1.0"
+  verify-version:
+    description: >-
+      Version of @intyga/verify, the offline verifier that checks the receipt. Defaults to the version
+      this Action release was built and tested against.
+    required: false
+    # Pinned for the same reason as sdk-version, and it needs its own pin: @intyga/sdk declares
+    # `@intyga/verify` as a caret range, so pinning only the SDK would still let a later 1.x verifier
+    # be resolved at run time — and the verifier is the code that decides whether a receipt is valid.
+    # Installing both explicitly makes npm satisfy the SDK's range with this exact copy.
+    #
+    # scripts/build-public-tree.sh rewrites this from the real verifier manifest, like sdk-version.
+    default: "1.1.0"
 
 runs:
   using: "composite"
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
       with:
-        node-version: "20"
+        node-version: "24"
 
     # 1) Create the challenge and get the deep-link immediately (does NOT block).
     - name: Request Intyga approval
@@ -88,17 +129,22 @@ runs:
         INTYGA_CLIENT_ID: ${{ inputs.client-id }}
         INTYGA_CLIENT_SECRET: ${{ inputs.client-secret }}
         SDK_VERSION: ${{ inputs.sdk-version }}
+        VERIFY_VERSION: ${{ inputs.verify-version }}
         ACTION_DESCRIPTION: ${{ inputs.action-description }}
         GATEWAY_URL: ${{ inputs.gateway-url }}
         WEB_URL: ${{ inputs.web-url }}
         ACTION_TYPE: ${{ inputs.action-type }}
         TARGET: ${{ inputs.target }}
         PARAMS: ${{ inputs.params }}
+        REQUEST_ID: ${{ inputs.request-id }}
       run: |
-        npx --yes "@intyga/sdk@${SDK_VERSION}" intyga authorize "$ACTION_DESCRIPTION" \
+        EXTRA=()
+        if [ "$REQUEST_ID" = "true" ]; then EXTRA+=(--request-id); fi
+        npx --yes -p "@intyga/sdk@${SDK_VERSION}" -p "@intyga/verify@${VERIFY_VERSION}" intyga authorize "$ACTION_DESCRIPTION" \
           --gateway "$GATEWAY_URL" --web "$WEB_URL" --target "$TARGET" \
-          --type "$ACTION_TYPE" --params "$PARAMS" --no-wait
-        # exposes steps.request.outputs.nonce and .approval_url
+          --type "$ACTION_TYPE" --params "$PARAMS" --no-wait \
+          "${EXTRA[@]}"
+        # exposes steps.request.outputs.nonce, .approval_url and .params (the exact params that were signed)
 
     # 2) Notify the approver in Slack/Teams with context + an Approve button (their webhook, their data).
     - name: Notify approver
@@ -108,6 +154,7 @@ runs:
         INTYGA_SLACK_WEBHOOK: ${{ inputs.slack-webhook }}
         INTYGA_TEAMS_WEBHOOK: ${{ inputs.teams-webhook }}
         SDK_VERSION: ${{ inputs.sdk-version }}
+        VERIFY_VERSION: ${{ inputs.verify-version }}
         ACTION_DESCRIPTION: ${{ inputs.action-description }}
         APPROVAL_URL: ${{ steps.request.outputs.approval_url }}
       run: |
@@ -115,7 +162,7 @@ runs:
           echo "### 🔒 Intyga approval required"
           echo "[Approve: ${ACTION_DESCRIPTION}](${APPROVAL_URL})"
         } >> "$GITHUB_STEP_SUMMARY"
-        npx --yes "@intyga/sdk@${SDK_VERSION}" intyga notify \
+        npx --yes -p "@intyga/sdk@${SDK_VERSION}" -p "@intyga/verify@${VERIFY_VERSION}" intyga notify \
           --url "$APPROVAL_URL" \
           --context "$ACTION_DESCRIPTION"
 
@@ -124,20 +171,40 @@ runs:
       shell: bash
       env:
         SDK_VERSION: ${{ inputs.sdk-version }}
+        VERIFY_VERSION: ${{ inputs.verify-version }}
         NONCE: ${{ steps.request.outputs.nonce }}
         GATEWAY_URL: ${{ inputs.gateway-url }}
         ACTION_TYPE: ${{ inputs.action-type }}
         TARGET: ${{ inputs.target }}
-        PARAMS: ${{ inputs.params }}
+        # The params the request step actually signed (includes approvalRequestId with request-id).
+        PARAMS: ${{ steps.request.outputs.params }}
         TIMEOUT: ${{ inputs.timeout }}
         CONSUME: ${{ inputs.consume }}
+        REQUIRED_APPROVALS: ${{ inputs.required-approvals }}
+        EVIDENCE_FILE: ${{ inputs.evidence-file }}
+        APPROVERS_JSON: ${{ inputs.approvers-json }}
         INTYGA_APPROVER_KEYS: ${{ inputs.approver-keys }}
         INTYGA_WEBAUTHN_ORIGIN: ${{ inputs.webauthn-origin }}
         INTYGA_WEBAUTHN_RP_ID: ${{ inputs.webauthn-rp-id }}
       run: |
+        set -euo pipefail
+        # Exactly one trust source: a receipt cannot vouch for its own signer.
+        if [ -n "$APPROVERS_JSON" ] && [ -n "$INTYGA_APPROVER_KEYS" ]; then
+          echo "::error::give approvers-json or approver-keys, not both"; exit 1
+        fi
+        if [ -z "$APPROVERS_JSON" ] && [ -z "$INTYGA_APPROVER_KEYS" ]; then
+          echo "::error::a trusted approver source is required: approvers-json or approver-keys"; exit 1
+        fi
         EXTRA=()
+        if [ -n "$APPROVERS_JSON" ]; then
+          APPROVERS_FILE="$RUNNER_TEMP/intyga-approvers.json"
+          ( umask 077; printf '%s' "$APPROVERS_JSON" > "$APPROVERS_FILE" )
+          export INTYGA_APPROVERS_FILE="$APPROVERS_FILE"
+        fi
+        if [ -n "$REQUIRED_APPROVALS" ]; then EXTRA+=(--required-approvals "$REQUIRED_APPROVALS"); fi
+        if [ -n "$EVIDENCE_FILE" ]; then EXTRA+=(--evidence "$EVIDENCE_FILE"); fi
         if [ "$CONSUME" = "true" ]; then EXTRA+=(--consume); fi
-        npx --yes "@intyga/sdk@${SDK_VERSION}" intyga await "$NONCE" \
+        npx --yes -p "@intyga/sdk@${SDK_VERSION}" -p "@intyga/verify@${VERIFY_VERSION}" intyga await "$NONCE" \
           --gateway "$GATEWAY_URL" --target "$TARGET" \
           --type "$ACTION_TYPE" --params "$PARAMS" \
           --timeout "$TIMEOUT" \
