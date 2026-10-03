@@ -1,4 +1,4 @@
-# Intyga — Require Human Approval (GitHub Action)
+# INTYGA — Require Human Approval (GitHub Action)
 
 A composite Action that makes a production deploy (or any high-stakes step) **impossible without a
 cryptographically-signed human approval** — verified offline before the job proceeds. No application code
@@ -52,7 +52,7 @@ pipeline continues — they never open GitHub. A convenience gate, not a blockin
 ## Inputs
 | Input | Required | Default | Notes |
 |---|---|---|---|
-| `gateway-url` | ✅ | — | Intyga gateway base URL |
+| `gateway-url` | ✅ | — | INTYGA gateway base URL |
 | `web-url` | ✅ | — | Console base URL hosting `/approve` |
 | `client-id` / `client-secret` | ✅ | — | A **SERVICE**-identity API key (passed via env, never on argv) |
 | `target` | ✅ | — | The environment/RP being acted on. Bound into the signature (DIV Target Isolation), so an approval minted for staging cannot be replayed against prod |
