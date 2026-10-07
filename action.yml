@@ -98,7 +98,7 @@ inputs:
     #
     # scripts/build-public-tree.sh rewrites this from the real SDK manifest when building the public
     # Action repo, so it cannot drift the way a hand-typed literal would.
-    default: "1.1.0"
+    default: "1.2.0"
   verify-version:
     description: >-
       Version of @intyga/verify, the offline verifier that checks the receipt. Defaults to the version
@@ -110,7 +110,7 @@ inputs:
     # Installing both explicitly makes npm satisfy the SDK's range with this exact copy.
     #
     # scripts/build-public-tree.sh rewrites this from the real verifier manifest, like sdk-version.
-    default: "1.1.0"
+    default: "1.2.0"
 
 runs:
   using: "composite"
