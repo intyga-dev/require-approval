@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Require signed human approval
-        uses: intyga-dev/require-approval@v1 # or ./examples/ci-cd-github-action within this repo
+        uses: intyga-dev/require-approval@v2 # or ./examples/ci-cd-github-action within this repo
         with:
           gateway-url: ${{ secrets.INTYGA_GATEWAY_URL }}
           web-url: ${{ secrets.INTYGA_WEB_URL }}

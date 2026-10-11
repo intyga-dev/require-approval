@@ -11,7 +11,7 @@ jobs:
   approve:
     runs-on: ubuntu-latest
     steps:
-      - uses: intyga-dev/require-approval@v1
+      - uses: intyga-dev/require-approval@v2
         with:
           gateway-url: ${{ secrets.INTYGA_GATEWAY_URL }}
           web-url: ${{ secrets.INTYGA_WEB_URL }}
